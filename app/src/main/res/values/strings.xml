@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">DJI Control Server</string>
+    <string name="connected_to">Connected To:</string>
+    <string name="none_connected">None</string>
+    <string name="control_server_ip">Control Server IP:</string>
+    <string name="ip_format">%1$s:%2$d</string>
+    <string name="registering">Registering…</string>
+    <string name="registered">Registered! SDK Version: %1$s</string>
+    <string name="register_failed">Registration Failed!</string>
+    <string name="unknown_drone">Unknown Drone</string>
+    <string name="battery_percentage">Battery: %1$d%2$s</string>
+    <string name="drone_disconnected">Drone Disconnected</string>
+</resources>
