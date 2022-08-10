@@ -18,41 +18,63 @@ Android App that exposes a high level REST API to control DJI drones and fetch c
 Following are the available endpoints, all as GET Requests:
 
 **Connection**
-1. `/`: Connection test endpoint. Returns string "Connected" if request received successfully.
+* `/`: Connection test endpoint. Returns string "Connected" if request received successfully.
 
 **Takeoff and Landing**
 
-2. `/takeoff`: Initiate take off. Returns when takeoff is successfully initiated.
-3. `/land`: Initiate landing. If landing protection is enabled, it descends to 30cm off the ground and awaits landing confirmation. If landing protection is disabled, causes the drone to land. Returns when landing is successfully initiated.
-4. `/confirmLanding`: Needed to confirm landing only if landing protection is enabled. Returns when landing confirmation is successfully initiated.
-5. `/isLandingProtectionEnabled`: Returns true if landing protection is enabled, else false.
-6. `/enableLandingProtection`: Enables landing protection.
-7. `/disableLandingProtection`: Disables landing protection.
+* `/takeoff`: Initiate take off. Returns when takeoff is successfully initiated.
+* `/land`: Initiate landing. If landing protection is enabled, it descends to 30cm off the ground and awaits landing confirmation. If landing protection is disabled causes the drone to land. Returns when landing is successfully initiated.
+* `/confirmLanding`: Needed to confirm landing only if landing protection is enabled. Returns when landing confirmation is successfully initiated.
+* `/isLandingProtectionEnabled`: Returns true if landing protection is enabled, else false.
+* `/enableLandingProtection`: Enables landing protection.
+* `/disableLandingProtection`: Disables landing protection.
+
+**Control Modes**
+
+* `/getControlMode`: Returns the current control mode. Either POSITION or VELOCITY
+* `/setControlMode/{mode}`: Sets the current control mode. `mode` must be `"POSITION"` or `"VELOCITY"`
 
 **Motion Planning**
 
-8. `/getMaxSpeed`: Gets max allowable speed in m/s.
-9. `/setMaxSpeed/{speed}`: Sets max allowable speed, with parameter `speed` in m/s, limited to 4 m/s.
-10. `/getVelocityProfile`: Gets the current velocity profile used to generate velocity commands for movement.
-11. `/setVelocityProfile/{profile}`: Sets the velocity profile to be used. Parameter `profile` must `"CONSTANT"`, `"TRAPEZOIDAL"` or `"S_CURVE"`.
+* `/getMaxSpeed`: Gets max allowable speed in m/s.
+* `/setMaxSpeed/{speed}`: Sets max allowable speed, with parameter `speed` in m/s, limited to 4 m/s.
+* `/getVelocityProfile`: Gets the current velocity profile used to generate velocity commands for movement.
+* `/setVelocityProfile/{profile}`: Sets the velocity profile to be used. Parameter `profile` must be `"CONSTANT"`, `"TRAPEZOIDAL"` or `"S_CURVE"`.
 
 **IMU state reading**
 
-12. `/startCollectingIMUState/{interval}`: Starts a coroutine that collects the current IMU state (X, Y and Z velocities) every `interval` milliseconds.
-13. `/stopCollectingIMUState`: Stops the coroutine registered by calling `startCollectingIMUState`
-14. `/getCollectedIMUStates`: Returns a list of IMU states collected so far.
-15. `/clearCollectedIMUStates`: Clears the collected IMU states list.
+* `/startCollectingIMUState/{interval}`: Starts a coroutine that collects the current IMU state (X velocity, Y velocity, Z velocity, Roll, Pitch, Yaw) every `interval` milliseconds.
+* `/stopCollectingIMUState`: Stops the coroutine registered by calling `startCollectingIMUState`
+* `/getCollectedIMUStates`: Returns a list of IMU states collected so far.
+* `/clearCollectedIMUStates`: Clears the collected IMU states list.
 
-**Movement and Rotation**
+**Positional Movement and Rotation**
 
-16. `/moveForward/{dist}`: Move forward `dist` meters. Returns when the planned flight paths is entirely traversed.
-17. `/moveBackward/{dist}`: Move backward `dist` meters. Returns when the planned flight paths is entirely traversed.
-18. `/moveLeft/{dist}`: Move left `dist` meters. Returns when the planned flight paths is entirely traversed.
-19. `/moveRight/{dist}`: Move right `dist` meters. Returns when the planned flight paths is entirely traversed.
-20. `/moveUp/{dist}`: Move up `dist` meters. Returns when the planned flight paths is entirely traversed.
-21. `/moveDown/{dist}`: Move down `dist` meters (*Unsafe method since there is no check on current altitude before calling this*). Returns when the planned flight paths is entirely traversed.
-22. `/rotateClockwise/{angle}`: Rotate clockwise by given angle (in degrees). Returns when the planned flight paths is entirely traversed.
-23. `/rotateCounterClockwise/{angle}`: Rotate counter clockwise by given angle (in degrees). Returns when the planned flight paths is entirely traversed.
+Following endpoints only available when control mode is set to `POSITION`
+
+* `/moveForward/{dist}`: Move forward `dist` meters. Returns when the planned flight paths is entirely traversed.
+* `/moveBackward/{dist}`: Move backward `dist` meters. Returns when the planned flight paths is entirely traversed.
+* `/moveLeft/{dist}`: Move left `dist` meters. Returns when the planned flight paths is entirely traversed.
+* `/moveRight/{dist}`: Move right `dist` meters. Returns when the planned flight paths is entirely traversed.
+* `/moveUp/{dist}`: Move up `dist` meters. Returns when the planned flight paths is entirely traversed.
+* `/moveDown/{dist}`: Move down `dist` meters (*Unsafe method since there is no check on current altitude before calling this*). Returns when the planned flight paths is entirely traversed.
+* `/rotateClockwise/{angle}`: Rotate clockwise by given angle (in degrees). Returns when the planned flight paths is entirely traversed.
+* `/rotateCounterClockwise/{angle}`: Rotate counter clockwise by given angle (in degrees). Returns when the planned flight paths is entirely traversed.
+
+**Velocity Control Commands**
+
+Following endpoints only availabe when control mode is set to `VELOCITY`
+
+* `/startVelocityControl`: Starts coroutine that moves drone with currently set velocity vector.
+
+* `/setVelocityCommand/{xVel}/{yVel}/{zVel}/{yawRate}`: Sets the velocity vector given the parameters. Can only be called after calling `/startVelocityControl`.
+
+* `/stopVelocityControl`: Stops coroutine that moves drone with currently set velocity vector.
+
+**Other**
+
+* `/getHeading`: Returns current heading angle with respect to true north.
+
 
 ## Usage
 

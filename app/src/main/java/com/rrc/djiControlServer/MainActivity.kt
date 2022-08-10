@@ -13,6 +13,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.websocket.*
 import android.net.wifi.WifiManager
 import android.os.*
+import android.service.controls.Control
 import android.text.format.Formatter
 import android.util.Log
 import android.widget.TextView
@@ -41,7 +42,7 @@ data class CommandCompleted(val completed: Boolean, val errorDescription: String
 
 data class DroneState<T>(val state:T)
 
-data class IMUState(val velX: Float, val velY: Float, val velZ: Float)
+data class IMUState(val velX: Float, val velY: Float, val velZ: Float, val roll: Float, val pitch: Float, val yaw: Float)
 
 class DJIControlException(message:String): Exception(message)
 
@@ -51,6 +52,10 @@ enum class VelocityProfile {
 
 enum class Direction {
     FORWARD, BACKWARD, LEFT, RIGHT, UP, DOWN, CLOCKWISE, COUNTER_CLOCKWISE
+}
+
+enum class ControlMode {
+    POSITION, VELOCITY
 }
 
 class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
@@ -86,17 +91,25 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
 
     private var drone: Aircraft? = null
 
-    private var maxSpeed = 1.0f // 1m/s
+    private var maxSpeed = 0.2f // 20cm/s
     private var maxAngularSpeed = 30.0f // 30 deg/s
-    private var maxAcceleration = 0.8f // 0.8 m/s^2
+    private var maxAcceleration = 0.1f // 10 cm/s^2
     private var maxAngularAcceleration = 15.0f // 15 deg/s^2
-    private var maxJerk = 1.0f // 1.0 m/s^3
+    private var maxJerk = 0.2f // 20 cm/s^3
     private var maxAngularJerk = 30.0f // 30 deg/s^3
     private var flightCommandInterval = 40L // 40 ms = 25Hz
 
     private var imuStates = mutableListOf<IMUState?>()
     private var imuStatePostRunnable: Runnable? = null
     private var readIMUState = false
+    private var controlMode = ControlMode.POSITION
+
+    private var velocityModeXVel = 0f
+    private var velocityModeYVel = 0f
+    private var velocityModeZVel = 0f
+    private var velocityModeYawVel = 0f
+    private var followingVelocityCommands = false
+    private var velocityControlRunnable: Runnable? = null
 
     private var velocityProfile: VelocityProfile = VelocityProfile.TRAPEZOIDAL
 
@@ -144,6 +157,7 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 getState()
                 setState()
                 takeoffAndLandControl()
+                velocityControl()
                 throttleControl()
                 yawControl()
                 rollPitchControl()
@@ -173,11 +187,12 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                     imuStatePostRunnable = object: Runnable {
                         override fun run() {
                             val currIMUState = drone?.flightController?.state
-                            val currVelocities = if(currIMUState != null)
-                                IMUState(currIMUState.velocityX, currIMUState.velocityY, currIMUState.velocityZ)
+                            val currFilteredState = if(currIMUState != null)
+                                IMUState(currIMUState.velocityX, currIMUState.velocityY, currIMUState.velocityZ,
+                                    currIMUState.attitude.roll.toFloat(), currIMUState.attitude.pitch.toFloat(), currIMUState.attitude.yaw.toFloat())
                             else
                                 null
-                            imuStates.add(currVelocities)
+                            imuStates.add(currFilteredState)
                             if(readIMUState)
                                 handler.postDelayed(this, imuReadInterval)
                         }
@@ -272,6 +287,10 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
             call.respond(DroneState(maxSpeed))
         }
 
+        get("/getMaxAngularSpeed") {
+            call.respond(DroneState(maxAngularSpeed))
+        }
+
         get("/getVelocityProfile") {
             val profileName = when(velocityProfile) {
                 VelocityProfile.CONSTANT -> "CONSTANT"
@@ -279,6 +298,15 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 VelocityProfile.S_CURVE -> "S_CURVE"
             }
             call.respond(DroneState(profileName))
+        }
+
+        get("/getControlMode") {
+            val controlModeName = when(controlMode) {
+                ControlMode.POSITION -> "POSITION"
+                ControlMode.VELOCITY -> "VELOCITY"
+            }
+
+            call.respond(DroneState(controlModeName))
         }
 
         get("/getHeading") {
@@ -348,6 +376,26 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 call.respond(CommandCompleted(false, "No speed provided"))
         }
 
+        get("/setMaxAngularSpeed/{speed}") {
+            if(call.parameters["speed"] != null) {
+                try {
+                    val speed = call.parameters["speed"]!!.toFloat()
+
+                    if(speed <= 0)
+                        throw NumberFormatException("Speed must be a positive float")
+
+                    maxAngularSpeed = speed
+
+                    call.respond(CommandCompleted(true, null))
+                }
+                catch(e: Exception){
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "No speed provided"))
+        }
+
         get("/setVelocityProfile/{profile}") {
             if(call.parameters["profile"] != null) {
                 val profile = call.parameters["profile"].toString().uppercase()
@@ -366,6 +414,33 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
             }
             else
                 call.respond(CommandCompleted(false, "No profile provided"))
+        }
+
+        get("/setControlMode/{mode}") {
+            if(call.parameters["mode"] != null) {
+
+                try {
+                    if(followingVelocityCommands)
+                        throw DJIControlException("Cannot change control mode while velocity commands are being followed. First stop velocity control and then try again.")
+                    val mode = call.parameters["mode"].toString().uppercase()
+                    var validMode = true
+                    when(mode) {
+                        "POSITION" -> controlMode = ControlMode.POSITION
+                        "VELOCITY" -> controlMode = ControlMode.VELOCITY
+                        else -> validMode = false
+                    }
+
+                    if(validMode)
+                        call.respond(CommandCompleted(true, null))
+                    else
+                        call.respond(CommandCompleted(false, "Profile must either be 'POSITION' or 'VELOCITY'"))
+                }
+                catch(e: DJIControlException){
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "No control mode provided"))
         }
     }
 
@@ -414,6 +489,104 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
 
     }
 
+    private fun Route.velocityControl() {
+
+        get("/startVelocityControl") {
+            if(drone != null) {
+                try {
+                    if(controlMode == ControlMode.POSITION)
+                        throw DJIControlException("Cannot use VELOCITY command in POSITION control mode")
+
+                    setVirtualSticks(true)
+                    setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
+
+                    val handler = Handler(Looper.getMainLooper())
+
+                    followingVelocityCommands = true
+
+                    velocityControlRunnable = object: Runnable {
+                        override fun run() {
+                            drone?.flightController?.sendVirtualStickFlightControlData(FlightControlData(velocityModeYVel, velocityModeXVel, velocityModeYawVel, velocityModeZVel)) {
+                                if(followingVelocityCommands)
+                                    handler.postDelayed(this, flightCommandInterval)
+                            }
+                        }
+                    }
+
+                    handler.postDelayed(velocityControlRunnable as Runnable, flightCommandInterval)
+
+                    call.respond(CommandCompleted(true, null))
+                }
+                catch(e: DJIControlException) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+                catch(e:Exception) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone Not Available"))
+
+        }
+
+        get("/setVelocityCommand/{xVel}/{yVel}/{zVel}/{yawVel}") {
+            if(drone != null) {
+                try {
+                    if(controlMode == ControlMode.POSITION)
+                        throw DJIControlException("Cannot use VELOCITY command in POSITION control mode")
+                    if(!followingVelocityCommands)
+                        throw DJIControlException("Cannot set velocity commands before starting Velocity Control")
+                    val xVel = call.parameters["xVel"]!!.toFloat()
+                    val yVel = call.parameters["yVel"]!!.toFloat()
+                    val zVel = call.parameters["zVel"]!!.toFloat()
+                    val yawVel = call.parameters["yawVel"]!!.toFloat()
+
+                    velocityModeXVel = xVel
+                    velocityModeYVel = yVel
+                    velocityModeZVel = zVel
+                    velocityModeYawVel = yawVel
+
+                    call.respond(CommandCompleted(true, null))
+                }
+                catch(e: NumberFormatException) {
+                    call.respond(CommandCompleted(false, "Velocities must be valid floats."))
+                }
+                catch(e: DJIControlException) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone Not Available"))
+        }
+
+        get("/stopVelocityControl") {
+            if(drone != null) {
+                try {
+                    if(controlMode == ControlMode.POSITION)
+                        throw DJIControlException("Cannot use VELOCITY command in POSITION control mode")
+                    setVirtualSticks(false)
+                    followingVelocityCommands = false
+                    velocityModeXVel = 0f
+                    velocityModeYawVel = 0f
+                    velocityModeZVel = 0f
+                    velocityModeYawVel = 0f
+                    val handler = Handler(Looper.getMainLooper())
+                    handler.removeCallbacks(velocityControlRunnable as Runnable)
+                    call.respond(CommandCompleted(true, null))
+                }
+                catch(e: DJIControlException) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+                catch(e: Exception) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone Not Available"))
+        }
+
+    }
+
     private fun Route.throttleControl() {
 
         get("/moveUp/{dist}") {
@@ -421,6 +594,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -454,6 +629,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -490,6 +667,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["angle"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val angle = getNumVal(call.parameters["angle"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -522,6 +701,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["angle"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val angle = getNumVal(call.parameters["angle"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -556,6 +737,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -588,6 +771,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -620,6 +805,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
@@ -652,6 +839,8 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 if(call.parameters["dist"] != null) {
                     val currentControlModes = getCurrentControlModes()
                     try {
+                        if(controlMode == ControlMode.VELOCITY)
+                            throw DJIControlException("Cannot use POSITION command in VELOCITY control mode")
                         val dist = getNumVal(call.parameters["dist"].toString())
                         setVirtualSticks(true)
                         setCurrentControlModes(Triple(VerticalControlMode.VELOCITY, YawControlMode.ANGULAR_VELOCITY, RollPitchControlMode.VELOCITY))
