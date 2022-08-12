@@ -8,6 +8,7 @@ Android App that exposes a high level REST API to control DJI drones and fetch c
 
 1. Take off and land drone.
 2. 6DOF motion control. Move up, down, forward, backwards, left, right, as well as rotate clockwise and counter clockwise.
+3. Control in both Position mode and Velocity mode.
 3. Start and stop collecting X, Y, Z velocities at given frequency and fetch recorded states.
 4. Enable/Disable Landing Protection.
 5. Get/Set top speed.
@@ -31,14 +32,16 @@ Following are the available endpoints, all as GET Requests:
 
 **Control Modes**
 
-* `/getControlMode`: Returns the current control mode. Either POSITION or VELOCITY
+* `/getControlMode`: Returns the current control mode. Either POSITION or VELOCITY. Defaults to `POSITION` on app launch.
 * `/setControlMode/{mode}`: Sets the current control mode. `mode` must be `"POSITION"` or `"VELOCITY"`
 
 **Motion Planning**
 
 * `/getMaxSpeed`: Gets max allowable speed in m/s.
-* `/setMaxSpeed/{speed}`: Sets max allowable speed, with parameter `speed` in m/s, limited to 4 m/s.
-* `/getVelocityProfile`: Gets the current velocity profile used to generate velocity commands for movement.
+* `/setMaxSpeed/{speed}`: Sets max allowable speed, with parameter `speed` in m/s
+* `/getMaxAngularSpeed`: Get max allowable angular speed in deg/s
+* `/setMaxAngularSpeed/{speed}`: Set max allowable speed, with parameter `speed` in deg/s
+* `/getVelocityProfile`: Gets the current velocity profile used to generate velocity commands for movement. Defaults to `CONSTANT` on app launch.
 * `/setVelocityProfile/{profile}`: Sets the velocity profile to be used. Parameter `profile` must be `"CONSTANT"`, `"TRAPEZOIDAL"` or `"S_CURVE"`.
 
 **IMU state reading**

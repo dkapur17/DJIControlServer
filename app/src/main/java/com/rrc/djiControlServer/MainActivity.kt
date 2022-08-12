@@ -13,7 +13,6 @@ import io.ktor.server.netty.Netty
 import io.ktor.websocket.*
 import android.net.wifi.WifiManager
 import android.os.*
-import android.service.controls.Control
 import android.text.format.Formatter
 import android.util.Log
 import android.widget.TextView
@@ -91,6 +90,13 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
 
     private var drone: Aircraft? = null
 
+    private var imuStates = mutableListOf<IMUState?>()
+    private var imuStatePostRunnable: Runnable? = null
+    private var readIMUState = false
+
+    private var controlMode = ControlMode.POSITION
+
+    // Position Control Mode Constant
     private var maxSpeed = 0.2f // 20cm/s
     private var maxAngularSpeed = 30.0f // 30 deg/s
     private var maxAcceleration = 0.1f // 10 cm/s^2
@@ -98,12 +104,9 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
     private var maxJerk = 0.2f // 20 cm/s^3
     private var maxAngularJerk = 30.0f // 30 deg/s^3
     private var flightCommandInterval = 40L // 40 ms = 25Hz
+    private var velocityProfile: VelocityProfile = VelocityProfile.CONSTANT
 
-    private var imuStates = mutableListOf<IMUState?>()
-    private var imuStatePostRunnable: Runnable? = null
-    private var readIMUState = false
-    private var controlMode = ControlMode.POSITION
-
+    // Velocity Control Mode Constants
     private var velocityModeXVel = 0f
     private var velocityModeYVel = 0f
     private var velocityModeZVel = 0f
@@ -111,7 +114,6 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
     private var followingVelocityCommands = false
     private var velocityControlRunnable: Runnable? = null
 
-    private var velocityProfile: VelocityProfile = VelocityProfile.TRAPEZOIDAL
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
