@@ -43,6 +43,8 @@ data class DroneState<T>(val state:T)
 
 data class IMUState(val velX: Float, val velY: Float, val velZ: Float, val roll: Float, val pitch: Float, val yaw: Float)
 
+data class VelocityCommand(val velX: Float, val velY: Float, val velZ: Float, val yawRate: Float)
+
 class DJIControlException(message:String): Exception(message)
 
 enum class VelocityProfile {
@@ -224,6 +226,29 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                     call.respond(CommandCompleted(true, null))
                 }
                 catch(e: Exception) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone Not Available"))
+        }
+
+        get("/getCurrentIMUState") {
+            if(drone != null) {
+                try {
+                    val currIMUState = drone?.flightController?.state
+                    val currFilteredState = if(currIMUState != null)
+                        IMUState(currIMUState.velocityX, currIMUState.velocityY, currIMUState.velocityZ,
+                            currIMUState.attitude.roll.toFloat(), currIMUState.attitude.pitch.toFloat(), currIMUState.attitude.yaw.toFloat())
+                    else
+                        null
+
+                    if(currFilteredState == null)
+                        call.respond(CommandCompleted(false, "Unable to fetch IMU data."))
+                    else
+                        call.respond(DroneState(currFilteredState))
+                }
+                catch (e: Exception) {
                     call.respond(CommandCompleted(false, e.message))
                 }
             }
@@ -554,6 +579,28 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                     call.respond(CommandCompleted(false, "Velocities must be valid floats."))
                 }
                 catch(e: DJIControlException) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+                catch(e: Exception) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone Not Available"))
+        }
+
+        get("/getCurrentVelocityCommand") {
+            if(drone != null) {
+                try {
+                    if(controlMode == ControlMode.POSITION)
+                        throw DJIControlException("Cannot use VELOCITY command in POSITION control mode")
+
+                    call.respond(VelocityCommand(velocityModeXVel, velocityModeYVel, velocityModeZVel, velocityModeYawVel))
+                }
+                catch(e: DJIControlException) {
+                    call.respond(CommandCompleted(false, e.message))
+                }
+                catch(e: Exception) {
                     call.respond(CommandCompleted(false, e.message))
                 }
             }
