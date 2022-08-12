@@ -50,7 +50,7 @@ Following are the available endpoints, all as GET Requests:
 * `/stopCollectingIMUState`: Stops the coroutine registered by calling `startCollectingIMUState`
 * `/getCollectedIMUStates`: Returns a list of IMU states collected so far.
 * `/clearCollectedIMUStates`: Clears the collected IMU states list.
-* `/getCurrentIMUState`: Gets current IMU state (X velocity, Y velocity, Z velocity, Roll, Pitch, Yaw). Not recommended, since there is a transmission delay between the client to the server, which would mean the IMU State returned is of a different from both request and response times.
+* `/getCurrentIMUState`: Gets current IMU state (X velocity, Y velocity, Z velocity, Roll, Pitch, Yaw). Not recommended, since there is a transmission delay between the client to the server, which would mean the IMU State returned is of a different time than both request and response times.
 
 **Positional Movement and Rotation**
 
