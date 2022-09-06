@@ -88,7 +88,7 @@ To build this app, clone the repo and open it in Android Studio. Then, in the An
 
 Start the app, and connect the phone to a DJI remote controller. Once the drone is connected to the remote controller, all the API endpoints should become available on the IP address of the mobile device on port `8080`.
 
-Works well with the `DJIControlClient` written in Python, but in practice can work with any langauge where REST API calls can be made.
+Works well with the [DJIControlClient](https://github.com/dkapur17/DJIControlClient) written in Python, but in practice can work with any langauge where REST API calls can be made.
 
 ## Caveats
 
