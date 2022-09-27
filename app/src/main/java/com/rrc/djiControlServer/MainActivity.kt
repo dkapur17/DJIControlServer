@@ -24,6 +24,9 @@ import dji.common.camera.SettingsDefinitions
 import dji.common.error.DJIError
 import dji.common.error.DJISDKError
 import dji.common.flightcontroller.virtualstick.*
+import dji.common.gimbal.GimbalMode
+import dji.common.gimbal.Rotation
+import dji.common.gimbal.RotationMode
 import dji.common.util.CommonCallbacks
 import dji.sdk.base.BaseComponent
 import dji.sdk.base.BaseProduct
@@ -43,6 +46,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -183,6 +187,27 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
     private fun Route.meta() {
         get("/") {
             call.respondText ( text="Connected", contentType = ContentType.Text.Plain )
+        }
+
+        get("/reboot") {
+            if(drone != null) {
+                if(drone!!.flightController != null) {
+                    val rebootError = suspendCoroutine<DJIError?> { cont ->
+                        drone!!.flightController!!.reboot { error ->
+                            cont.resume(error)
+                        }
+                    }
+
+                    if(rebootError != null)
+                        call.respond(CommandCompleted(false, "Reboot Error: " + rebootError.description))
+
+                    call.respond(CommandCompleted(true, null))
+                }
+                else
+                    call.respond(CommandCompleted(false, "Flight Controller Not available"))
+            }
+            else
+                call.respond(CommandCompleted(false, "Drone not Available"))
         }
 
         get("/startCollectingIMUState/{interval}") {
@@ -484,352 +509,226 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
     private fun Route.cameraControl() {
 
         get("/captureShot") {
-            if(drone != null) {
-                if(drone?.camera != null) {
-                    if(drone!!.camera!!.isFlatCameraModeSupported)
-                    {
-                        val flatModeError = suspendCoroutine<DJIError?> { cont ->
-                            drone!!.camera!!.setFlatMode(SettingsDefinitions.FlatCameraMode.PHOTO_SINGLE) { error ->
-                                cont.resume(error)
-                            }
-                        }
 
-                        if(flatModeError != null)
-                            call.respond(CommandCompleted(false, "Error in setting flat mode: " + flatModeError.description))
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.camera == null)
+                return@get call.respond(CommandCompleted(false, "Camera not Available"))
+            if(drone!!.camera!!.mediaManager == null)
+                return@get call.respond(CommandCompleted(false, "Media Manager Not Available"))
+            if(!drone!!.camera!!.isFlatCameraModeSupported)
+                return@get call.respond(CommandCompleted(false, "Only Flat-Camera Mode is supported"))
 
-                        val singleShotError = suspendCoroutine<DJIError?> { cont ->
-                            drone!!.camera!!.startShootPhoto { error ->
-                                cont.resume(error)
-                            }
-                        }
-
-                        if(singleShotError != null)
-                            call.respond(CommandCompleted(false, "Error in taking single shot" +  singleShotError.description))
-
-                        call.respond(CommandCompleted(true, null))
-                    }
-                    else
-                        call.respond(CommandCompleted(false, "Non-Flat Camera Mode not supported"))
+            // Get out of playback mode if in it
+            suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.exitPlayback { error ->
+                    cont.resume(error)
                 }
-                else
-                    call.respond(CommandCompleted(false, "Camera not Available"))
             }
-            else
-                call.respond(CommandCompleted(false, "Drone not Available"))
+
+            val flatModeError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.setFlatMode(SettingsDefinitions.FlatCameraMode.PHOTO_SINGLE) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(flatModeError != null)
+                return@get call.respond(CommandCompleted(false, "Error in setting flat mode: " + flatModeError.description))
+
+            val singleShotError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.startShootPhoto { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(singleShotError != null)
+                return@get call.respond(CommandCompleted(false, "Error in taking single shot" +  singleShotError.description))
+
+            return@get call.respond(CommandCompleted(true, null))
 
         }
 
-        get("/fetchThumbnailFromIndex/{n}") {
+        get("/pitchGimbal/{angle}") {
 
-            if(drone != null) {
-                if(drone!!.camera != null) {
-                    if(drone!!.camera!!.isFlatCameraModeSupported) {
-                        if(drone!!.camera!!.mediaManager != null) {
-
-                            var n = 0
-                            if(call.parameters["n"] != null)
-                            {
-                                try {
-                                    n = call.parameters["n"]!!.toInt()
-
-                                    if(n < 0)
-                                        throw NumberFormatException()
-                                }
-                                catch (e: NumberFormatException) {
-                                    call.respond(CommandCompleted(false, "n Must be a non-negative integer"))
-                                }
-                            }
-
-                            if (drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                            {
-                                val refreshError = suspendCoroutine<DJIError?> { cont ->
-                                    drone!!.camera!!.mediaManager!!.refreshFileList { error ->
-                                        cont.resume(error)
-                                    }
-                                }
-
-                                if(refreshError != null)
-                                    call.respond(CommandCompleted(false, "Unable to refresh file list: " + refreshError.description))
-                            }
-
-                            if(drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                                call.respond(CommandCompleted(false, "Unable to refresh file list"))
-
-                            val mediaFiles = drone!!.camera!!.mediaManager!!.sdCardFileListSnapshot
-
-                            if(mediaFiles == null)
-                                call.respond(CommandCompleted(false, "Unable to fetch media files"))
-
-                            mediaFiles!!.sortByDescending { it.timeCreated }
-
-                            if(n >= mediaFiles.size)
-                                call.respond(CommandCompleted(false, "Index n exceeds total number of files in storage"))
-
-                            val targetFile = mediaFiles[n]
-
-                            val enterPlaybackError = suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.enterPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-                            if(enterPlaybackError != null)
-                                call.respond(CommandCompleted(false, "Enter Playback Error: " + enterPlaybackError.description))
-
-                            if(targetFile.thumbnail == null) {
-                                val thumbnailFetchError = suspendCoroutine<DJIError?> { cont ->
-                                    targetFile.fetchThumbnail { error ->
-                                        cont.resume(error)
-                                    }
-                                }
-
-                                if(thumbnailFetchError != null)
-                                    call.respond(CommandCompleted(false, "Unable to fetch thumbnail: " + thumbnailFetchError.description))
-                            }
-                            val thumbnail = targetFile.thumbnail
-                            val b64Thumbnail = bitmapToString(thumbnail)
-
-                            suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.exitPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-                            call.respond(DroneState(b64Thumbnail))
-                        }
-                        else
-                            call.respond(CommandCompleted(false, "Media manager not Available"))
-
-                    }
-                    else
-                        call.respond(CommandCompleted(false, "Non-Flat camera mode not supported"))
-                }
-                else
-                    call.respond(CommandCompleted(false, "Camera not Available"))
+            // Parse Angle
+            val angle = try {
+                -call.parameters["angle"]!!.toFloat()
+            } catch (e: Exception) {
+                0f
             }
-            else
-                call.respond(CommandCompleted(false, "Drone not Available"))
+
+            if(angle > 0 || angle < -90)
+                return@get call.respond(CommandCompleted(false, "Pitch Angle Must be between 0 and 90 deg"))
+
+            showToast("Made it here!")
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.gimbal == null)
+                return@get call.respond(CommandCompleted(false, "Gimbal not Available"))
+
+            val gimbalModeError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.gimbal!!.setMode(GimbalMode.FPV) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(gimbalModeError != null)
+                return@get call.respond(CommandCompleted(false, "Gimbal Mode Error: " + gimbalModeError.description))
+
+
+            val gimbalRotation = Rotation.Builder().mode(RotationMode.ABSOLUTE_ANGLE).pitch(angle).yaw(Rotation.NO_ROTATION).roll(Rotation.NO_ROTATION).time(1.0).build()
+
+
+            val gimbalRotationError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.gimbal!!.rotate(gimbalRotation) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(gimbalRotationError != null)
+                return@get call.respond(CommandCompleted(false, "Gimbal Rotation Error: " + gimbalRotationError.description))
+
+            return@get call.respond(CommandCompleted(true, null))
+        }
+
+        get("/capturePanorama") {
+
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.camera == null)
+                return@get call.respond(CommandCompleted(false, "Camera not Available"))
+            if(drone!!.camera!!.mediaManager == null)
+                return@get call.respond(CommandCompleted(false, "Media Manager Not Available"))
+            if(!drone!!.camera!!.isFlatCameraModeSupported)
+                return@get call.respond(CommandCompleted(false, "Only Flat-Camera Mode is supported"))
+
+            // Get out of playback mode if in it
+            suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.exitPlayback { error ->
+                    cont.resume(error)
+                }
+            }
+
+            val flatModeError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.setFlatMode(SettingsDefinitions.FlatCameraMode.PHOTO_PANORAMA) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(flatModeError != null)
+                return@get call.respond(CommandCompleted(false, "Error in setting flat mode: " + flatModeError.description))
+
+            val panoramaModeError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.setPhotoPanoramaMode(SettingsDefinitions.PhotoPanoramaMode.PANORAMA_MODE_3X1) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(panoramaModeError != null)
+                return@get call.respond(CommandCompleted(false, "Error in setting Panorama mode: " + panoramaModeError.description))
+
+            val panoramaShotError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.startShootPhoto { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(panoramaShotError != null)
+                return@get call.respond(CommandCompleted(false, "Error in taking panorama shot: " + panoramaShotError.description))
+
+            return@get call.respond(CommandCompleted(true, null))
 
         }
+
 
         get("/fetchPreviewFromIndex/{n}") {
 
-            if(drone != null) {
-                if(drone!!.camera != null) {
-                    if(drone!!.camera!!.isFlatCameraModeSupported) {
-                        if(drone!!.camera!!.mediaManager != null) {
-
-                            var n = 0
-                            if(call.parameters["n"] != null)
-                            {
-                                try {
-                                    n = call.parameters["n"]!!.toInt()
-
-                                    if(n < 0)
-                                        throw NumberFormatException()
-                                }
-                                catch (e: NumberFormatException) {
-                                    call.respond(CommandCompleted(false, "n Must be a non-negative integer"))
-                                }
-                            }
-
-                            if (drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                            {
-                                val refreshError = suspendCoroutine<DJIError?> { cont ->
-                                    drone!!.camera!!.mediaManager!!.refreshFileList { error ->
-                                        cont.resume(error)
-                                    }
-                                }
-
-                                if(refreshError != null)
-                                    call.respond(CommandCompleted(false, "Unable to refresh file list: " + refreshError.description))
-                            }
-
-                            if(drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                                call.respond(CommandCompleted(false, "Unable to refresh file list"))
-
-                            val mediaFiles = drone!!.camera!!.mediaManager!!.sdCardFileListSnapshot
-
-                            if(mediaFiles == null)
-                                call.respond(CommandCompleted(false, "Unable to fetch media files"))
-
-                            mediaFiles!!.sortByDescending { it.timeCreated }
-
-                            if(n >= mediaFiles.size)
-                                call.respond(CommandCompleted(false, "Index n exceeds total number of files in storage"))
-
-                            val targetFile = mediaFiles[n]
-
-                            val enterPlaybackError = suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.enterPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-                            if(enterPlaybackError != null)
-                                call.respond(CommandCompleted(false, "Enter Playback Error: " + enterPlaybackError.description))
-
-                            if(targetFile.preview == null) {
-                                val previewFetchError = suspendCoroutine<DJIError?> { cont ->
-                                    targetFile.fetchPreview { error ->
-                                        cont.resume(error)
-                                    }
-                                }
-
-                                if(previewFetchError != null)
-                                    call.respond(CommandCompleted(false, "Unable to fetch thumbnail: " + previewFetchError.description))
-                            }
-                            val preview = targetFile.preview
-                            val b64Thumbnail = bitmapToString(preview)
-
-                            suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.exitPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-                            call.respond(DroneState(b64Thumbnail))
-                        }
-                        else
-                            call.respond(CommandCompleted(false, "Media manager not Available"))
-
-                    }
-                    else
-                        call.respond(CommandCompleted(false, "Non-Flat camera mode not supported"))
-                }
-                else
-                    call.respond(CommandCompleted(false, "Camera not Available"))
+            // Parse Index
+            val n = try {
+                val parsedIdx = call.parameters["n"]!!.toInt()
+                assert(parsedIdx >= 0)
+                parsedIdx
+            } catch (e: Exception) {
+                0
             }
-            else
-                call.respond(CommandCompleted(false, "Drone not Available"))
+
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.camera == null)
+                return@get call.respond(CommandCompleted(false, "Camera not Available"))
+            if(drone!!.camera!!.mediaManager == null)
+                return@get call.respond(CommandCompleted(false, "Media Manager Not Available"))
+            if(!drone!!.camera!!.isFlatCameraModeSupported)
+                return@get call.respond(CommandCompleted(false, "Only Flat-Camera Mode is supported"))
+
+            var exitPlaybackError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.exitPlayback { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(exitPlaybackError != null)
+                return@get call.respond(CommandCompleted(false, "Error in initial Playback mode exit: " + exitPlaybackError.description))
+
+            // Refresh File List
+            val refreshError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.mediaManager!!.refreshFileListOfStorageLocation(SettingsDefinitions.StorageLocation.SDCARD) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(refreshError != null)
+                return@get call.respond(CommandCompleted(false, "Error in Refreshing File List: " + refreshError.description))
+
+            // Fetch Media Files and Sort
+            val mediaFiles = drone!!.camera!!.mediaManager!!.sdCardFileListSnapshot
+
+            if(mediaFiles == null)
+                return@get call.respond(CommandCompleted(false, "Error in fetching File List Snapshot"))
+
+            if (n >= mediaFiles!!.size)
+                return@get call.respond(CommandCompleted(false, "Index $n greater than number of images available (${mediaFiles.size})"))
+
+            mediaFiles.sortByDescending { it.timeCreated }
+
+            // Get target file
+            val targetFile = mediaFiles[n]
+
+            // Fetch target file preview
+            if(targetFile.preview == null)
+            {
+                val previewFetchError = suspendCoroutine<DJIError?> { cont ->
+                    targetFile.fetchPreview { error ->
+                        cont.resume(error)
+                    }
+                }
+
+                if(previewFetchError != null)
+                    return@get call.respond(CommandCompleted(false, "Error in fetching preview: " + previewFetchError.description + " Target File Name: " + targetFile.fileName))
+            }
+
+            // Convert image to base64 string
+            val previewString = bitmapToString(targetFile.preview)
+
+            // Exit Playback Mode
+            exitPlaybackError = suspendCoroutine { cont ->
+                drone!!.camera!!.exitPlayback { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(exitPlaybackError != null)
+                return@get call.respond(CommandCompleted(false, "Error in exiting playback mode: " + exitPlaybackError.description))
+
+            // Return Preview String
+            return@get call.respond(DroneState(previewString))
+
         }
 
-        get("/fetchMediaFromIndex/{n}") {
-
-            if(drone != null) {
-                if(drone!!.camera != null) {
-                    if(drone!!.camera!!.isFlatCameraModeSupported) {
-                        if(drone!!.camera!!.mediaManager != null) {
-
-                            var n = 0
-                            if(call.parameters["n"] != null)
-                            {
-                                try {
-                                    n = call.parameters["n"]!!.toInt()
-
-                                    if(n < 0)
-                                        throw NumberFormatException()
-                                }
-                                catch (e: NumberFormatException) {
-                                    call.respond(CommandCompleted(false, "n Must be a non-negative integer"))
-                                }
-                            }
-
-                            if (drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                            {
-                                val refreshError = suspendCoroutine<DJIError?> { cont ->
-                                    drone!!.camera!!.mediaManager!!.refreshFileList { error ->
-                                        cont.resume(error)
-                                    }
-                                }
-
-                                if(refreshError != null)
-                                    call.respond(CommandCompleted(false, "Unable to refresh file list: " + refreshError.description))
-                            }
-
-                            if(drone!!.camera!!.mediaManager!!.sdCardFileListState != MediaManager.FileListState.UP_TO_DATE)
-                                call.respond(CommandCompleted(false, "Unable to refresh file list"))
-
-                            val mediaFiles = drone!!.camera!!.mediaManager!!.sdCardFileListSnapshot
-
-                            if(mediaFiles == null)
-                                call.respond(CommandCompleted(false, "Unable to fetch media files"))
-
-                            mediaFiles!!.sortByDescending { it.timeCreated }
-
-                            if(n >= mediaFiles.size)
-                                call.respond(CommandCompleted(false, "Index n exceeds total number of files in storage"))
-
-                            val targetFile = mediaFiles[n]
-
-                            val enterPlaybackError = suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.enterPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-                            if(enterPlaybackError != null)
-                                call.respond(CommandCompleted(false, "Enter Playback Error: " + enterPlaybackError.description))
-
-
-                            val fullMediaBuffer = ByteBuffer.allocate(targetFile.fileSize.toInt())
-
-                            val downloadError = suspendCoroutine { cont ->
-                                targetFile.fetchFileByteData(0, object: DownloadListener<String> {
-                                    override fun onStart() {
-                                        return
-                                    }
-
-                                    override fun onRateUpdate(p0: Long, p1: Long, p2: Long) {
-                                        return
-                                    }
-
-                                    override fun onRealtimeDataUpdate(
-                                        p0: ByteArray?,
-                                        p1: Long,
-                                        p2: Boolean
-                                    ) {
-                                        if(p0 != null)
-                                            fullMediaBuffer.put(p0)
-                                        return
-                                    }
-
-                                    override fun onProgress(p0: Long, p1: Long) {
-                                        return
-                                    }
-
-                                    override fun onSuccess(p0: String?) {
-                                        cont.resume(p0)
-                                    }
-
-                                    override fun onFailure(p0: DJIError?) {
-                                        cont.resume(p0)
-                                    }
-                                })
-                            }
-
-                            if(downloadError is DJIError)
-                                call.respond(CommandCompleted(false, "Error in downloading: " + downloadError.description))
-                            else if(downloadError is String) {
-                                val fullImageBytes = fullMediaBuffer.array()
-                                val fullImageString = Base64.encodeToString(fullImageBytes, Base64.NO_WRAP)
-                                call.respond(DroneState(fullImageString))
-                            }
-                            else
-                                call.respond(CommandCompleted(false, "Error in downloading"))
-
-
-                            suspendCoroutine<DJIError?> { cont ->
-                                drone!!.camera!!.exitPlayback { error ->
-                                    cont.resume(error)
-                                }
-                            }
-
-
-                        }
-                        else
-                            call.respond(CommandCompleted(false, "Media manager not Available"))
-
-                    }
-                    else
-                        call.respond(CommandCompleted(false, "Non-Flat camera mode not supported"))
-                }
-                else
-                    call.respond(CommandCompleted(false, "Camera not Available"))
-            }
-            else
-                call.respond(CommandCompleted(false, "Drone not Available"))
-        }
     }
 
     private fun Route.takeoffAndLandControl() {
