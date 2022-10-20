@@ -384,6 +384,20 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
                 call.respond(CommandCompleted(false, "Drone Not Available"))
         }
 
+        get("/getAltitude") {
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone Not Available"))
+
+            if(drone!!.flightController == null)
+                return@get call.respond(CommandCompleted(false, "Flight Controller Unavailable"))
+
+            if(drone!!.flightController!!.state.isUltrasonicBeingUsed)
+                return@get call.respond(DroneState(drone!!.flightController!!.state.ultrasonicHeightInMeters))
+            else
+                return@get call.respond(CommandCompleted(false, "Ultrasonic Sensor Not Being Used Currently"))
+
+        }
+
     }
 
     private fun Route.setState() {
@@ -549,6 +563,68 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
 
         }
 
+        get ("/startVideoRecording") {
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.camera == null)
+                return@get call.respond(CommandCompleted(false, "Camera not Available"))
+            if(drone!!.camera!!.mediaManager == null)
+                return@get call.respond(CommandCompleted(false, "Media Manager Not Available"))
+            if(!drone!!.camera!!.isFlatCameraModeSupported)
+                return@get call.respond(CommandCompleted(false, "Only Flat-Camera Mode is supported"))
+
+            // Get out of playback mode if in it
+            suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.exitPlayback { error ->
+                    cont.resume(error)
+                }
+            }
+
+            val flatModeError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.setFlatMode(SettingsDefinitions.FlatCameraMode.VIDEO_NORMAL) { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(flatModeError != null)
+                return@get call.respond(CommandCompleted(false, "Error in setting flat mode: " + flatModeError.description))
+
+            val startVideoError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.startRecordVideo { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(startVideoError != null)
+                return@get call.respond(CommandCompleted(false, "Error in starting video recording" +  startVideoError.description))
+
+            return@get call.respond(CommandCompleted(true, null))
+        }
+
+        get("/stopVideoRecording") {
+            // Availability Checks
+            if(drone == null)
+                return@get call.respond(CommandCompleted(false, "Drone not Available"))
+            if(drone!!.camera == null)
+                return@get call.respond(CommandCompleted(false, "Camera not Available"))
+            if(drone!!.camera!!.mediaManager == null)
+                return@get call.respond(CommandCompleted(false, "Media Manager Not Available"))
+            if(!drone!!.camera!!.isFlatCameraModeSupported)
+                return@get call.respond(CommandCompleted(false, "Only Flat-Camera Mode is supported"))
+
+            val stopVideoError = suspendCoroutine<DJIError?> { cont ->
+                drone!!.camera!!.stopRecordVideo { error ->
+                    cont.resume(error)
+                }
+            }
+
+            if(stopVideoError != null)
+                return@get call.respond(CommandCompleted(false, "Error in stopping video recording" +  stopVideoError.description))
+
+            return@get call.respond(CommandCompleted(true, null))
+        }
+
         get("/pitchGimbal/{angle}") {
 
             // Parse Angle
@@ -686,11 +762,9 @@ class MainActivity : AppCompatActivity(), DJISDKManager.SDKManagerCallback {
 
             // Fetch Media Files and Sort
             val mediaFiles = drone!!.camera!!.mediaManager!!.sdCardFileListSnapshot
+                ?: return@get call.respond(CommandCompleted(false, "Error in fetching File List Snapshot"))
 
-            if(mediaFiles == null)
-                return@get call.respond(CommandCompleted(false, "Error in fetching File List Snapshot"))
-
-            if (n >= mediaFiles!!.size)
+            if (n >= mediaFiles.size)
                 return@get call.respond(CommandCompleted(false, "Index $n greater than number of images available (${mediaFiles.size})"))
 
             mediaFiles.sortByDescending { it.timeCreated }
