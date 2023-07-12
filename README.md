@@ -4,7 +4,7 @@ Android App that exposes a high level REST API to control DJI drones and fetch c
 
 ## Features
 
-![Screen Shot](./SS.jpeg)
+![Screen Shot](assets/SS.jpeg)
 
 1. Take off and land drone.
 2. 6DOF motion control. Move up, down, forward, backwards, left, right, as well as rotate clockwise and counter clockwise.
