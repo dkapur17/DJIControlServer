@@ -1,5 +1,9 @@
 # DJI Control Server
 
+<div align="center">
+    <img src="assets/Logo.png" width=300>
+</div>
+
 Android App that exposes a high level REST API to control DJI drones and fetch certain state variables. Primarily created to control DJI drones using code in a GPS denied indoor environment.
 
 ## Features
